@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env python3
 
 from __future__ import annotations
 
@@ -6,13 +6,14 @@ import os
 import shutil
 import subprocess
 import csv
-import readline
 import signal
 from collections import deque
 from pathlib import Path
 
-from colorama import Fore, Style, just_fix_windows_console
-
+try:
+    import readline
+except ImportError:
+    readline = None
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -23,13 +24,17 @@ CSV_HEADERS = ["Title", "Page", "Book"]
 HISTORY_LIMIT = 10
 PREVIEW_ROWS = 5
 
-RESET = Style.RESET_ALL
-RED = Fore.RED
-CYAN = Fore.CYAN
-GREEN = Fore.GREEN
-YELLOW = Fore.YELLOW
-MAGENTA = Fore.MAGENTA
-BLUE = Fore.BLUE
+RESET = "\033[0m"
+BLACK = "\033[30m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN = "\033[36m"
+WHITE = "\033[37m"
+BOLD = "\033[1m"
+
 
 SEPARATOR = f"{BLUE}{'-' * 60}{RESET}"
 SUCCESS = f"{BLUE}[{GREEN}+{BLUE}]{RESET}"
@@ -308,12 +313,11 @@ def load_title_history(
 
 def load_readline_history(title_history: deque[str]) -> None:
     """Load recent titles into readline history."""
-    readline.clear_history()
-
-    for title in title_history:
-        readline.add_history(title)
-
-    readline.set_history_length(title_history.maxlen or HISTORY_LIMIT)
+    if readline:
+        readline.clear_history()
+        for title in title_history:
+            readline.add_history(title)
+        readline.set_history_length(title_history.maxlen or HISTORY_LIMIT)
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +552,6 @@ def edit_index(csv_path: Path) -> bool:
 
 def run() -> None:
     """Run the terminal indexer."""
-    just_fix_windows_console()
     signal.signal(signal.SIGINT, handle_interrupt)
 
     directory = ensure_index_directory()
