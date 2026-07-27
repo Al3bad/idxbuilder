@@ -1,150 +1,673 @@
-#! /bin/python3
-import csv
+#!/opt/homebrew/bin/python3
+
+from __future__ import annotations
+
 import os
-from os.path import expanduser
-import signal 
-import pandas as pd
-from colorama import Fore, Style
+import shutil
+import subprocess
+import csv
+import readline
+import signal
+from collections import deque
+from pathlib import Path
 
-headers = ['Title', 'Page','book']
-index = []
-row = []
-dictionary = {} # Define formatting
-reset = Style.RESET_ALL
-red = Fore.RED
-cyan = Fore.CYAN
-green = Fore.GREEN
-yellow = Fore.YELLOW
-purple = Fore.MAGENTA
-sep = Fore.BLUE + "---------------------------" + reset
-tick = Fore.BLUE + "[" + Fore.GREEN + "+" + Fore.BLUE + "]" + reset
-tickBad = Fore.YELLOW + "[" + Fore.RED + "X" + Fore.YELLOW+ "]" + reset
-awaitingInput = Fore.BLUE + "-----" + Fore.GREEN + "> " + reset
-tickInfo = Fore.BLUE + "[" + yellow + "!" + Fore.BLUE + "]" + reset
+from colorama import Fore, Style, just_fix_windows_console
 
-os.system("clear")
-print(tick, "Welcome to Sans Terminal Indexer")
-print(tick, "Enter" , green, "\"new book\"" , reset, "to change to the next book")
-book = input("Which book number are you currently working on?\n")
-def path():
-    home = expanduser("~")
-    path = '/.Indexes/'
-    if not os.path.exists(home+path):
-        print("~/.Indexes Does not exist! Creating .Index directory in your home folder!")
-        os.mkdir(home+path)
 
-    os.chdir(home+path)
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 
-# Handle control+c
-def handler(signum, frame):
-    os.system("clear")
-    print(red, "Exiting")
-    exit(0)
-signal.signal(signal.SIGINT, handler)
+INDEX_DIRECTORY = Path.cwd() / ".Index"
+CSV_HEADERS = ["Title", "Page", "Book"]
+HISTORY_LIMIT = 10
+PREVIEW_ROWS = 5
 
-# Kick off program, check if any .csv files are in directory, if not, prompt user to create one
-def init():
-    os.system("clear")
-    path()
-    count = 0
-    csvCheck = os.listdir()
+RESET = Style.RESET_ALL
+RED = Fore.RED
+CYAN = Fore.CYAN
+GREEN = Fore.GREEN
+YELLOW = Fore.YELLOW
+MAGENTA = Fore.MAGENTA
+BLUE = Fore.BLUE
 
-    # If a .csv file exists in the current directory (~.Indexes) then prompt user for which one they would like to use
-    print(tickInfo,"CSV Exists in current directory, which would you like to use? ")
-    for i in csvCheck:
-        if (i.endswith(".csv")):
-            # For each file that ends in .csv, add to dictionary, then for each value, assign a key from 1-n.
-            # This will allow the user to select a number that corresponds to the csv file.
-            if i.endswith((".csv")):
-                count+=1
-                dictionary[count]=i
+SEPARATOR = f"{BLUE}{'-' * 60}{RESET}"
+SUCCESS = f"{BLUE}[{GREEN}+{BLUE}]{RESET}"
+ERROR = f"{YELLOW}[{RED}X{YELLOW}]{RESET}"
+INFO = f"{BLUE}[{YELLOW}!{BLUE}]{RESET}"
 
-    # For each key and value, in the dictionary, print key and value for user to select from
-    for key, value in dictionary.items():
-        print(green, key, red,'-->', cyan , value, reset)
-    print(sep)
-    print(green, "0", red,  "-->" + cyan +  "  New index")
-        
-    # Ask the user which file they would like
-    selection = input(tick + green + " Type the number of the file you would like\n" + reset)
-    os.system("clear")
-    
-    # If selecing existing csv, set csvName to choice and exit function
-    if selection != "0":
-        csvName = dictionary[int(selection)]
-        print(tick, "You chose: ", csvName)
-        return csvName 
-            
-    csvName = input(tick + green + " Creating a new index, what do you want to name your CSV file?\n" + reset)
-        
-    if not csvName.endswith(".csv"):
-        csvName += ".csv"
 
-    with open(csvName, 'a') as f:
-        write = csv.writer(f)
-        write.writerow(headers)
+# ---------------------------------------------------------------------------
+# Readline prompt
+# ---------------------------------------------------------------------------
 
-    print(tick, "Creating file named: ", csvName)
-    os.system("clear")
-    return csvName
 
-def writeCsv():
-    os.system("clear")
-    with open(csvName, 'a') as f:
-        write = csv.writer(f)
-        write.writerows(index)
+def readline_colour(colour: str) -> str:
+    """
+    Mark an ANSI colour sequence as non-printing.
 
-def readIndex(csvName):
-    print(tick, "Displaying entries for",cyan,csvName,reset)
-    df = pd.read_csv(csvName)
-    #bottom = df.tail()
-    print(df)
+    This prevents readline from incorrectly calculating the prompt width
+    when navigating command history with the arrow keys.
+    """
+    return f"\001{colour}\002"
 
-# Call init function and assign csvName to a string
-csvName = str(init())
 
-# Get user input
-while True:
-    # Set index and row to null 
-    index = []
-    row = []
-    # Get user input
-    print(green + "SANS Terminal Indexer")
-    print(sep)
-    print(green + "index ->" + purple + " View your current index")
-    print(green+ "new book ->"  + purple + " Change the book number you're working on")
-    print(green + "exit ->"  + purple + " exit the program")
-    print(sep)
-    readIndex(csvName)
-    print(sep)
-    newEntry = input(tick + green+" Enter your index entry. Format: Term,Page number\n" + purple +"STI~> " + yellow)
-    # Handle input
-    if newEntry == "exit":
-        writeCsv()
-        os._exit(0)
-    elif newEntry == "new book":
-        book = str(input(yellow + "Enter the book number\n"))
+ENTRY_PROMPT = f"{readline_colour(MAGENTA)}STI~> {readline_colour(YELLOW)}"
 
-    elif newEntry == "index":
-        readIndex(csvName)
 
-    elif newEntry.count(',') != 1:
-        print(newEntry.count(','))
-        print(tickBad + " Try again, make sure you have 1 commas")
-        
-    else: 
-        # Clear screen
-        os.system("clear")
+# ---------------------------------------------------------------------------
+# Terminal helpers
+# ---------------------------------------------------------------------------
 
-        # Split user input on commas and put into row variable
-        row = newEntry.split(",")
 
-        # Strip whitespace
-        strippedRow = [x.strip(' ') for x in row]
+def clear_screen() -> None:
+    """Clear the terminal."""
+    print("\033[2J\033[H", end="")
 
-        # append the book number to the end of the list 
-        strippedRow.append(book)
 
-        # Append row to list called index (This is a list of a lists)
-        index.append(strippedRow)
-        writeCsv()
+def pause(message: str = "Press Enter to continue.") -> None:
+    """Pause until the user presses Enter."""
+    input(message)
+
+
+def handle_interrupt(signum: int, frame: object) -> None:
+    """Exit cleanly when Ctrl+C is pressed."""
+    del signum, frame
+
+    print(f"\n{RED}Exiting.{RESET}")
+    raise SystemExit(0)
+
+
+# ---------------------------------------------------------------------------
+# Index directory and file selection
+# ---------------------------------------------------------------------------
+
+
+def ensure_index_directory() -> Path:
+    """Create and return the local .Index directory."""
+    if not INDEX_DIRECTORY.exists():
+        print(f"{INFO} Creating index directory at {CYAN}{INDEX_DIRECTORY}{RESET}")
+
+    INDEX_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    return INDEX_DIRECTORY
+
+
+def find_csv_files(directory: Path) -> list[Path]:
+    """Return the CSV files in a directory, sorted alphabetically."""
+    return sorted(
+        (
+            path
+            for path in directory.iterdir()
+            if path.is_file() and path.suffix.lower() == ".csv"
+        ),
+        key=lambda path: path.name.lower(),
+    )
+
+
+def create_index_file(directory: Path) -> Path:
+    """Create a new CSV index."""
+    while True:
+        filename = input(f"{SUCCESS} {GREEN}New index name:{RESET}\n> ").strip()
+
+        if not filename:
+            print(f"{ERROR} The filename cannot be empty.")
+            continue
+
+        csv_path = directory / filename
+
+        if csv_path.suffix.lower() != ".csv":
+            csv_path = csv_path.with_suffix(".csv")
+
+        if csv_path.exists():
+            open_existing = (
+                input(f"{INFO} {csv_path.name} already exists. Open it? [y/N]: ")
+                .strip()
+                .lower()
+            )
+
+            if open_existing == "y":
+                return csv_path
+
+            continue
+
+        try:
+            with csv_path.open(
+                "w",
+                newline="",
+                encoding="utf-8",
+            ) as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow(CSV_HEADERS)
+        except OSError as error:
+            print(f"{ERROR} Could not create the index: {error}")
+            continue
+
+        print(f"{SUCCESS} Created {CYAN}{csv_path.name}{RESET}")
+        return csv_path
+
+
+def select_index_file(directory: Path) -> Path:
+    """Select an existing index or create a new one."""
+    while True:
+        clear_screen()
+
+        csv_files = find_csv_files(directory)
+
+        print(f"{SUCCESS} Welcome to SANS Terminal Indexer")
+        print(SEPARATOR)
+
+        if csv_files:
+            print(f"{INFO} Select an index:\n")
+
+            for number, csv_path in enumerate(csv_files, start=1):
+                print(
+                    f"{GREEN}{number:>2}{RESET} "
+                    f"{RED}-->{RESET} "
+                    f"{CYAN}{csv_path.name}{RESET}"
+                )
+        else:
+            print(f"{INFO} No indexes were found.\n")
+
+        print(f"{GREEN} 0{RESET} {RED}-->{RESET} {CYAN}Create a new index{RESET}")
+        print(SEPARATOR)
+
+        selection = input("Selection: ").strip()
+
+        if selection == "0":
+            return create_index_file(directory)
+
+        try:
+            selected_number = int(selection)
+            return csv_files[selected_number - 1]
+        except (ValueError, IndexError):
+            pause(f"{ERROR} Invalid selection. Press Enter to try again.")
+
+
+# ---------------------------------------------------------------------------
+# CSV operations
+# ---------------------------------------------------------------------------
+
+
+def normalise_entry(entry: dict[str, str]) -> dict[str, str]:
+    """Return an entry using the current column names."""
+    return {
+        "Title": entry.get("Title", "").strip(),
+        "Page": entry.get("Page", "").strip(),
+        "Book": entry.get("Book", entry.get("book", "")).strip(),
+    }
+
+
+def load_entries(csv_path: Path) -> list[dict[str, str]]:
+    """Read all entries from an index."""
+    try:
+        with csv_path.open(
+            "r",
+            newline="",
+            encoding="utf-8",
+        ) as csv_file:
+            reader = csv.DictReader(csv_file)
+            return [normalise_entry(entry) for entry in reader]
+
+    except (OSError, csv.Error) as error:
+        print(f"{ERROR} Could not read {csv_path.name}: {error}")
+        return []
+
+
+def add_entry(
+    csv_path: Path,
+    title: str,
+    page: int,
+    book: int,
+) -> None:
+    """Append one entry to an index."""
+    with csv_path.open(
+        "a",
+        newline="",
+        encoding="utf-8",
+    ) as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow([title, page, book])
+
+
+# ---------------------------------------------------------------------------
+# Index display
+# ---------------------------------------------------------------------------
+
+
+def print_index(csv_path: Path) -> None:
+    entries = load_entries(csv_path)
+
+    if not entries:
+        print(f"{INFO} The index is empty.")
+        return
+
+    headers = ["#", *CSV_HEADERS]
+
+    if len(entries) <= PREVIEW_ROWS * 2:
+        visible = list(enumerate(entries, start=1))
+    else:
+        visible = (
+            list(enumerate(entries[:PREVIEW_ROWS], start=1))
+            + [(None, None)]
+            + list(
+                enumerate(
+                    entries[-PREVIEW_ROWS:],
+                    start=len(entries) - PREVIEW_ROWS + 1,
+                )
+            )
+        )
+
+    rows = []
+
+    for number, entry in visible:
+        if entry is None:
+            rows.append(["...", "...", "...", "..."])
+            rows.append(["...", "...", "...", "..."])
+            rows.append(["...", "...", "...", "..."])
+        else:
+            rows.append(
+                [
+                    str(number),
+                    entry["Title"],
+                    entry["Page"],
+                    entry["Book"],
+                ]
+            )
+
+    widths = [
+        max(
+            len(headers[col]),
+            *(len(row[col]) for row in rows),
+        )
+        for col in range(len(headers))
+    ]
+
+    print(" | ".join(h.ljust(w) for h, w in zip(headers, widths)))
+    print("-+-".join("-" * w for w in widths))
+
+    for row in rows:
+        print(" | ".join(v.ljust(w) for v, w in zip(row, widths)))
+
+    print(f"\nTotal entries: {CYAN}{len(entries)}{RESET}")
+
+
+# ---------------------------------------------------------------------------
+# Title history
+# ---------------------------------------------------------------------------
+
+
+def load_title_history(
+    csv_path: Path,
+    limit: int = HISTORY_LIMIT,
+) -> deque[str]:
+    """Load the latest titles from an index."""
+    titles = [entry["Title"] for entry in load_entries(csv_path) if entry["Title"]]
+
+    return deque(titles[-limit:], maxlen=limit)
+
+
+def load_readline_history(title_history: deque[str]) -> None:
+    """Load recent titles into readline history."""
+    readline.clear_history()
+
+    for title in title_history:
+        readline.add_history(title)
+
+    readline.set_history_length(title_history.maxlen or HISTORY_LIMIT)
+
+
+# ---------------------------------------------------------------------------
+# Input handling
+# ---------------------------------------------------------------------------
+
+
+def prompt_for_book(current_book: int | None = None) -> int:
+    """Prompt for a book number."""
+    while True:
+        if current_book is None:
+            prompt = "Book number: "
+        else:
+            prompt = f"Book number [{current_book}]: "
+
+        value = input(f"{YELLOW}{prompt}{RESET}").strip()
+
+        if value and current_book is not None:
+            return current_book
+
+        if value.isdigit() and int(value) > 0:
+            return int(value)
+
+        print(f"{ERROR} The book number cannot be empty.")
+
+
+def prompt_for_page(current_page: int | None = None) -> int:
+    """Prompt for a positive page number."""
+    while True:
+        if current_page is None:
+            prompt = "Starting page: "
+        else:
+            prompt = f"Page [{current_page}]: "
+
+        value = input(f"{YELLOW}{prompt}{RESET}").strip()
+
+        if not value and current_page is not None:
+            return current_page
+
+        if value.isdigit() and int(value) > 0:
+            return int(value)
+
+        print(f"{ERROR} Enter a positive page number.")
+
+
+def parse_entry(
+    user_input: str,
+    current_page: int,
+) -> tuple[str, int] | None:
+    """
+    Parse either:
+
+        Title
+        Title, Page
+
+    A title without an explicit page uses the current page.
+    """
+    value = user_input.strip()
+
+    if not value:
+        return None
+
+    if "," not in value:
+        return value, current_page
+
+    title, page_text = value.rsplit(",", maxsplit=1)
+
+    title = title.strip()
+    page_text = page_text.strip()
+
+    if not title:
+        return None
+
+    try:
+        page = int(page_text)
+    except ValueError:
+        return None
+
+    if page < 1:
+        return None
+
+    return title, page
+
+
+# ---------------------------------------------------------------------------
+# Interface
+# ---------------------------------------------------------------------------
+
+
+def print_header() -> None:
+    """Display the current context and available commands."""
+    print(f"{GREEN}SANS Terminal Indexer{RESET}")
+    print(SEPARATOR)
+
+    print(f"{GREEN}npage{RESET}     {MAGENTA}Next page{RESET}")
+    print(f"{GREEN}ppage{RESET}     {MAGENTA}Previous page{RESET}")
+    print(f"{GREEN}p<num>{RESET}    {MAGENTA}Jump to page <num>{RESET}")
+    print(f"{GREEN}b<num>{RESET}    {MAGENTA}Change the current book{RESET}")
+    print(f"{GREEN}e{RESET}         {MAGENTA}Edit entries{RESET}")
+    print(f"{GREEN}index{RESET}     {MAGENTA}Switch index files{RESET}")
+    print(f"{GREEN}help{RESET}      {MAGENTA}Show this command list{RESET}")
+    print(f"{GREEN}exit{RESET}      {MAGENTA}Exit the program{RESET}")
+
+    print(SEPARATOR)
+
+
+def show_help() -> None:
+    """Display detailed usage instructions."""
+    clear_screen()
+
+    print(f"{GREEN}SANS Terminal Indexer — Commands{RESET}")
+    print(SEPARATOR)
+
+    print("Add an entry using the current page:")
+    print(f"  {CYAN}Windows Registry{RESET}")
+    print()
+
+    print("Add an entry with a different page:")
+    print(f"  {CYAN}Windows Registry, 125{RESET}")
+    print()
+
+    print("Page commands:")
+    print(f"  {CYAN}npage{RESET}        Next page")
+    print(f"  {CYAN}ppage{RESET}        Previous page")
+    print(f"  {CYAN}p<num>{RESET}       Jump to page <num>")
+    print()
+
+    print("Editing commands:")
+    print(f"  {CYAN}e{RESET}            Edit the latest item")
+    print()
+
+    print("Other commands:")
+    print(f"  {CYAN}b<num>{RESET}       Change the current book")
+    print(f"  {CYAN}index{RESET}        Switch index files")
+    print(f"  {CYAN}exit{RESET}         Exit")
+
+    print(SEPARATOR)
+    pause()
+
+
+# ---------------------------------------------------------------------------
+# Command handling
+# ---------------------------------------------------------------------------
+
+
+def handle_page_command(
+    command: str,
+    current_page: int,
+) -> int | None:
+    """
+    Handle page commands.
+
+    Return:
+        A new page number when the input is a page command.
+        None when the input is not a page command.
+    """
+    if command == "npage":
+        return current_page + 1
+
+    if command == "ppage":
+        return max(1, current_page - 1)
+
+    if command.startswith("p") and command[1:].isdigit():
+        requested_page = int(command[1:])
+
+        if requested_page > 0:
+            return requested_page
+
+    return None
+
+
+def handle_book_command(
+    command: str,
+    book: int,
+) -> int | None:
+    """
+    Handle book commands.
+
+    Return:
+        A new book number when the input is a book command.
+        None when the input is not a book command.
+    """
+    if command == "nbook":
+        return book + 1
+
+    if command == "pbook":
+        return max(1, book - 1)
+
+    if command.startswith("b") and command[1:].isdigit():
+        requested_book = int(command[1:])
+
+        if requested_book > 0:
+            return requested_book
+
+    return None
+
+
+def edit_index(csv_path: Path) -> bool:
+    """
+    Open the current index in the user's editor.
+
+    Returns True if the editor exited successfully.
+    """
+    editor = os.environ.get("EDITOR")
+
+    if not editor:
+        editor = shutil.which("nvim") or shutil.which("vim") or shutil.which("nano")
+
+    if not editor:
+        print(f"{ERROR} No editor found.")
+        return False
+
+    try:
+        subprocess.run(
+            [editor, "+normal G", str(csv_path)],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        print(f"{ERROR} Editor exited with an error.")
+        return False
+    except OSError as error:
+        print(f"{ERROR} Could not launch editor: {error}")
+        return False
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Application
+# ---------------------------------------------------------------------------
+
+
+def run() -> None:
+    """Run the terminal indexer."""
+    just_fix_windows_console()
+    signal.signal(signal.SIGINT, handle_interrupt)
+
+    directory = ensure_index_directory()
+    csv_path = select_index_file(directory)
+
+    title_history = load_title_history(csv_path)
+
+    clear_screen()
+    book = prompt_for_book()
+    current_page = prompt_for_page()
+
+    while True:
+        clear_screen()
+
+        print_header()
+
+        print_index(csv_path)
+        print(SEPARATOR)
+
+        load_readline_history(title_history)
+
+        print(
+            f"{SUCCESS} Enter a title, or use "
+            f"{GREEN}Title, Page{RESET} to override the current page.\n"
+        )
+
+        print(f"----------------------------------------------------------------")
+        print(
+            f"Index: {CYAN}{csv_path.name}{RESET}  "
+            f"Book: {CYAN}{book}{RESET}  "
+            f"Page: {CYAN}{current_page}{RESET}"
+        )
+        print(f"----------------------------------------------------------------")
+        user_input = input(ENTRY_PROMPT).strip()
+        print(RESET, end="")
+
+        if not user_input:
+            continue
+
+        command = user_input.lower()
+
+        if command == "exit":
+            print(f"{SUCCESS} Index saved. Goodbye.")
+            return
+
+        if command == "help":
+            show_help()
+            continue
+
+        if command == "index":
+            csv_path = select_index_file(directory)
+            title_history = load_title_history(csv_path)
+
+            clear_screen()
+            book = prompt_for_book(book)
+            current_page = prompt_for_page(current_page)
+            continue
+
+        new_book = handle_book_command(
+            command,
+            book,
+        )
+
+        new_page = handle_page_command(
+            command,
+            current_page,
+        )
+
+        if new_page is not None:
+            if command == "ppage" and current_page == 1:
+                pause(f"{ERROR} Page cannot be less than 1. Press Enter.")
+            else:
+                current_page = new_page
+
+            continue
+
+        if new_book is not None:
+            book = new_book
+            continue
+
+        if command == "e":
+            clear_screen()
+            if edit_index(csv_path):
+                title_history = load_title_history(csv_path)
+            clear_screen()
+            continue
+
+        parsed_entry = parse_entry(
+            user_input,
+            current_page,
+        )
+
+        if parsed_entry is None:
+            pause(
+                f"{ERROR} Invalid entry.\n\n"
+                "Use one of these formats:\n"
+                "  Title\n"
+                "  Title, Page\n\n"
+                "Press Enter to try again."
+            )
+            continue
+
+        title, page = parsed_entry
+
+        try:
+            add_entry(
+                csv_path=csv_path,
+                title=title,
+                page=page,
+                book=book,
+            )
+        except OSError as error:
+            pause(
+                f"{ERROR} Could not save the entry: {error}\nPress Enter to continue."
+            )
+            continue
+
+        title_history.append(title)
+
+
+if __name__ == "__main__":
+    run()
