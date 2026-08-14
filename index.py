@@ -20,7 +20,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 INDEX_DIRECTORY = Path.cwd() / ".Index"
-CSV_HEADERS = ["Title", "Page", "Book"]
+CSV_HEADERS = ["Term", "Book", "Page", "Note"]
+NOTE_DELIMITER = "|"
 HISTORY_LIMIT = 10
 PREVIEW_ROWS = 5
 
@@ -196,10 +197,51 @@ def select_index_file(directory: Path) -> Path:
 def normalise_entry(entry: dict[str, str]) -> dict[str, str]:
     """Return an entry using the current column names."""
     return {
-        "Title": entry.get("Title", "").strip(),
-        "Page": entry.get("Page", "").strip(),
+        # Fall back to "Title" so indexes created before this column was
+        # renamed still load correctly.
+        "Term": entry.get("Term", entry.get("Title", "")).strip(),
         "Book": entry.get("Book", entry.get("book", "")).strip(),
+        "Page": entry.get("Page", "").strip(),
+        "Note": entry.get("Note", "").strip(),
     }
+
+
+def migrate_index_file(csv_path: Path) -> None:
+    """
+    Bring an index file's header and column order up to date.
+
+    Indexes created before the Note column (or the Title -> Term rename)
+    still have their original header row on disk. Appending new rows to
+    such a file with today's column order silently corrupts Book/Page and
+    drops Note, because csv.DictReader maps columns by name using the
+    header row, not by position. Rewriting the file here, once, before any
+    further appends, prevents that.
+    """
+    try:
+        with csv_path.open("r", newline="", encoding="utf-8") as csv_file:
+            header = next(csv.reader(csv_file), [])
+    except OSError:
+        return
+
+    if header == CSV_HEADERS:
+        return
+
+    entries = load_entries(csv_path)
+
+    try:
+        with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(CSV_HEADERS)
+
+            for entry in entries:
+                writer.writerow([entry[column] for column in CSV_HEADERS])
+    except OSError as error:
+        print(
+            f"{ERROR} Could not update {csv_path.name} to the current format: {error}"
+        )
+        return
+
+    print(f"{INFO} Updated {CYAN}{csv_path.name}{RESET} to the current index format.")
 
 
 def load_entries(csv_path: Path) -> list[dict[str, str]]:
@@ -220,9 +262,10 @@ def load_entries(csv_path: Path) -> list[dict[str, str]]:
 
 def add_entry(
     csv_path: Path,
-    title: str,
-    page: int,
+    term: str,
     book: int,
+    page: int,
+    note: str = "",
 ) -> None:
     """Append one entry to an index."""
     with csv_path.open(
@@ -231,7 +274,7 @@ def add_entry(
         encoding="utf-8",
     ) as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow([title, page, book])
+        writer.writerow([term, book, page, note])
 
 
 # ---------------------------------------------------------------------------
@@ -266,16 +309,15 @@ def print_index(csv_path: Path) -> None:
 
     for number, entry in visible:
         if entry is None:
-            rows.append(["...", "...", "...", "..."])
-            rows.append(["...", "...", "...", "..."])
-            rows.append(["...", "...", "...", "..."])
+            rows.append(["...", "...", "...", "...", "..."])
         else:
             rows.append(
                 [
                     str(number),
-                    entry["Title"],
-                    entry["Page"],
+                    entry["Term"],
                     entry["Book"],
+                    entry["Page"],
+                    entry["Note"],
                 ]
             )
 
@@ -297,27 +339,27 @@ def print_index(csv_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Title history
+# Term history
 # ---------------------------------------------------------------------------
 
 
-def load_title_history(
+def load_term_history(
     csv_path: Path,
     limit: int = HISTORY_LIMIT,
 ) -> deque[str]:
-    """Load the latest titles from an index."""
-    titles = [entry["Title"] for entry in load_entries(csv_path) if entry["Title"]]
+    """Load the latest terms from an index."""
+    terms = [entry["Term"] for entry in load_entries(csv_path) if entry["Term"]]
 
-    return deque(titles[-limit:], maxlen=limit)
+    return deque(terms[-limit:], maxlen=limit)
 
 
-def load_readline_history(title_history: deque[str]) -> None:
-    """Load recent titles into readline history."""
+def load_readline_history(term_history: deque[str]) -> None:
+    """Load recent terms into readline history."""
     if readline:
         readline.clear_history()
-        for title in title_history:
-            readline.add_history(title)
-        readline.set_history_length(title_history.maxlen or HISTORY_LIMIT)
+        for term in term_history:
+            readline.add_history(term)
+        readline.set_history_length(term_history.maxlen or HISTORY_LIMIT)
 
 
 # ---------------------------------------------------------------------------
@@ -366,29 +408,43 @@ def prompt_for_page(current_page: int | None = None) -> int:
 def parse_entry(
     user_input: str,
     current_page: int,
-) -> tuple[str, int] | None:
+) -> tuple[str, int, str] | None:
     """
-    Parse either:
+    Parse one of:
 
-        Title
-        Title, Page
+        Term
+        Term, Page
+        Term | Note
+        Term, Page | Note
 
-    A title without an explicit page uses the current page.
+    A term without an explicit page uses the current page. A note is
+    always optional and, when present, comes after a pipe so it can
+    safely contain commas of its own.
     """
     value = user_input.strip()
 
     if not value:
         return None
 
+    if NOTE_DELIMITER in value:
+        value, note = value.rsplit(NOTE_DELIMITER, maxsplit=1)
+        value = value.strip()
+        note = note.strip()
+    else:
+        note = ""
+
+    if not value:
+        return None
+
     if "," not in value:
-        return value, current_page
+        return value, current_page, note
 
-    title, page_text = value.rsplit(",", maxsplit=1)
+    term, page_text = value.rsplit(",", maxsplit=1)
 
-    title = title.strip()
+    term = term.strip()
     page_text = page_text.strip()
 
-    if not title:
+    if not term:
         return None
 
     try:
@@ -399,7 +455,7 @@ def parse_entry(
     if page < 1:
         return None
 
-    return title, page
+    return term, page, note
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +493,14 @@ def show_help() -> None:
 
     print("Add an entry with a different page:")
     print(f"  {CYAN}Windows Registry, 125{RESET}")
+    print()
+
+    print("Add an entry with a note (uses the current page):")
+    print(f"  {CYAN}Windows Registry | HKLM hive locations{RESET}")
+    print()
+
+    print("Add an entry with a page and a note:")
+    print(f"  {CYAN}Windows Registry, 125 | HKLM hive locations{RESET}")
     print()
 
     print("Page commands:")
@@ -556,8 +620,9 @@ def run() -> None:
 
     directory = ensure_index_directory()
     csv_path = select_index_file(directory)
+    migrate_index_file(csv_path)
 
-    title_history = load_title_history(csv_path)
+    term_history = load_term_history(csv_path)
 
     clear_screen()
     book = prompt_for_book()
@@ -571,11 +636,12 @@ def run() -> None:
         print_index(csv_path)
         print(SEPARATOR)
 
-        load_readline_history(title_history)
+        load_readline_history(term_history)
 
         print(
-            f"{SUCCESS} Enter a title, or use "
-            f"{GREEN}Title, Page{RESET} to override the current page.\n"
+            f"{SUCCESS} Enter a term, add "
+            f"{GREEN}, Page{RESET} to override the current page, and/or add "
+            f"{GREEN}| Note{RESET} for a short note.\n"
         )
 
         print(f"----------------------------------------------------------------")
@@ -603,7 +669,8 @@ def run() -> None:
 
         if command == "index":
             csv_path = select_index_file(directory)
-            title_history = load_title_history(csv_path)
+            migrate_index_file(csv_path)
+            term_history = load_term_history(csv_path)
 
             clear_screen()
             book = prompt_for_book(book)
@@ -635,7 +702,7 @@ def run() -> None:
         if command == "e":
             clear_screen()
             if edit_index(csv_path):
-                title_history = load_title_history(csv_path)
+                term_history = load_term_history(csv_path)
             clear_screen()
             continue
 
@@ -648,20 +715,23 @@ def run() -> None:
             pause(
                 f"{ERROR} Invalid entry.\n\n"
                 "Use one of these formats:\n"
-                "  Title\n"
-                "  Title, Page\n\n"
+                "  Term\n"
+                "  Term, Page\n"
+                "  Term | Note\n"
+                "  Term, Page | Note\n\n"
                 "Press Enter to try again."
             )
             continue
 
-        title, page = parsed_entry
+        term, page, note = parsed_entry
 
         try:
             add_entry(
                 csv_path=csv_path,
-                title=title,
-                page=page,
+                term=term,
                 book=book,
+                page=page,
+                note=note,
             )
         except OSError as error:
             pause(
@@ -669,7 +739,7 @@ def run() -> None:
             )
             continue
 
-        title_history.append(title)
+        term_history.append(term)
 
 
 if __name__ == "__main__":
