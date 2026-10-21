@@ -10,6 +10,8 @@ SANS Index Builder: a one-line, keyboard-only indexer for SANS courses.
     python sans_index.py              # pick or create an index in ./.Index/
     python sans_index.py SEC504       # open/create ./.Index/SEC504.db
     python sans_index.py SEC504 --import-csv old.csv    # Term,Book,Page,Note CSV (old script format OK)
+    python sans_index.py SEC504 --transparent           # use the terminal's own (transparent) background
+                                                        # or set SANS_INDEX_TRANSPARENT=1 to make it permanent
 
 Everything happens on one prompt line:
 
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 import sqlite3
 import sys
@@ -600,6 +603,13 @@ Screen {{ background: #0d1117; }}
 #prompt {{ width: 1fr; border: tall {ACC}; background: #161b22; }}
 #prompt.editing {{ border: tall {WARN}; }}
 #hint {{ height: 1; color: #6e7681; background: #161b22; }}
+
+/* --transparent: let the terminal's own background (and its transparency) show through */
+Screen.transparent, Screen.transparent #top, Screen.transparent #panel, Screen.transparent #hint,
+Screen.transparent #prompt, Screen.transparent #prompt.editing {{ background: ansi_default; }}
+Screen.transparent #panel > .datatable--header,
+Screen.transparent #panel > .datatable--even-row,
+Screen.transparent #panel > .datatable--odd-row {{ background: ansi_default; }}
 """
 
 
@@ -621,8 +631,10 @@ class IndexApp(App):
         Binding("escape", "escape", show=False, priority=True),
     ]
 
-    def __init__(self, db: IndexDB):
-        super().__init__()
+    def __init__(self, db: IndexDB, transparent: bool = False):
+        # ansi_color lets Textual emit the terminal's *default* background instead of a solid colour
+        super().__init__(ansi_color=True if transparent else None)
+        self.transparent = transparent
         self.db = db
         self.index_name = db.path.stem
         self.book = db.get_meta("book", "1")
@@ -648,6 +660,8 @@ class IndexApp(App):
 
     def on_mount(self):
         self.theme = "textual-dark"
+        if self.transparent:
+            self.screen.add_class("transparent")
         self.table = self.query_one("#panel", DataTable)
         self.table.can_focus = False                       # focus never leaves the prompt
         self.prompt = self.query_one("#prompt", Input)
@@ -1026,6 +1040,9 @@ def main():
                                  epilog=__doc__)
     ap.add_argument("index", nargs="?", help="index name (e.g. SEC504) or path to a .db file")
     ap.add_argument("--import-csv", metavar="FILE", help="import a CSV (Term,Book,Page,Note) and exit")
+    ap.add_argument("--transparent", action="store_true",
+                    help="use the terminal's background (for transparent terminals); "
+                         "or set SANS_INDEX_TRANSPARENT=1")
     ap.add_argument("--export", metavar="MODE", nargs="?", const="all",
                     help="export without opening the TUI: all | csv | docx | combined")
     args = ap.parse_args()
@@ -1044,7 +1061,8 @@ def main():
         return
 
     db.backup()
-    IndexApp(db).run()
+    transparent = args.transparent or os.environ.get("SANS_INDEX_TRANSPARENT", "").lower() in ("1", "true", "yes", "on")
+    IndexApp(db, transparent=transparent).run()
 
 
 if __name__ == "__main__":

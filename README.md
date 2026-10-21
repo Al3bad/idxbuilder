@@ -38,16 +38,16 @@ cd idxbuilder
 The script declares its own dependencies ([PEP 723](https://peps.python.org/pep-0723/)), so [uv](https://docs.astral.sh/uv/) installs them into a cached environment the first time you run it. There's nothing else to set up.
 
 ```bash
-uv run sans_index.py              # pick or create an index
-uv run sans_index.py SEC504       # open or create the SEC504 index
+uv run index.py              # pick or create an index
+uv run index.py SEC504       # open or create the SEC504 index
 ```
 
 ### Option 2: plain Python
 
 ```bash
 pip install textual python-docx
-python3 sans_index.py             # pick or create an index
-python3 sans_index.py SEC504      # open or create the SEC504 index
+python3 index.py             # pick or create an index
+python3 index.py SEC504      # open or create the SEC504 index
 ```
 
 If pip refuses with an *"externally-managed-environment"* error (recent Ubuntu, Debian and Kali), use a virtual environment:
@@ -56,7 +56,22 @@ If pip refuses with an *"externally-managed-environment"* error (recent Ubuntu, 
 python3 -m venv .venv
 source .venv/bin/activate         # Windows: .venv\Scripts\activate
 pip install textual python-docx
-python sans_index.py SEC504
+python index.py SEC504
+```
+
+### Transparent background (optional)
+ 
+By default the tool draws its own dark background. If your terminal is transparent and you want that to show through, start it with `--transparent`:
+ 
+```bash
+uv run sans_index.py SEC504 --transparent
+python3 sans_index.py SEC504 --transparent
+```
+ 
+To make it permanent, set the environment variable in your shell profile (`~/.bashrc`, `~/.zshrc`):
+ 
+```bash
+export SANS_INDEX_TRANSPARENT=1
 ```
 
 ## Adding entries
@@ -137,8 +152,8 @@ Print the two DOCX files separately and keep them side by side in the exam. Use 
 You can also export without opening the app:
 
 ```bash
-uv run sans_index.py SEC504 --export          # or: python3 sans_index.py SEC504 --export
-uv run sans_index.py SEC504 --export csv
+uv run index.py SEC504 --export          # or: python3 index.py SEC504 --export
+uv run index.py SEC504 --export csv
 ```
 
 ## Importing an existing CSV
@@ -146,9 +161,9 @@ uv run sans_index.py SEC504 --export csv
 CSV files from the original script (`Term,Book,Page,Note`) and this tool's own CSV export can be imported:
 
 ```bash
-uv run sans_index.py SEC504 --import-csv .Index/SEC504.csv
+uv run index.py SEC504 --import-csv .Index/SEC504.csv
 # or
-python3 sans_index.py SEC504 --import-csv .Index/SEC504.csv
+python3 index.py SEC504 --import-csv .Index/SEC504.csv
 ```
 
 Duplicates (the same term on the same book and page) are skipped. Terms starting with `$ ` are imported as commands.
@@ -159,7 +174,7 @@ Indexes are SQLite databases in a hidden `.Index` directory inside the current w
 
 ```
 idxbuilder/
-├── sans_index.py
+├── index.py
 └── .Index/
     ├── SEC504.db          ← your index
     ├── SEC503.db
@@ -167,7 +182,7 @@ idxbuilder/
     └── exports/           ← DOCX / CSV output
 ```
 
-You can also pass a path directly: `python3 sans_index.py ~/indexes/FOR508.db`.
+You can also pass a path directly: `python3 index.py ~/indexes/FOR508.db`.
 
 ## Troubleshooting
 
