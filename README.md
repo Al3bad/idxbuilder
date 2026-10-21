@@ -64,8 +64,8 @@ python index.py SEC504
 By default the tool draws its own dark background. If your terminal is transparent and you want that to show through, start it with `--transparent`:
  
 ```bash
-uv run sans_index.py SEC504 --transparent
-python3 sans_index.py SEC504 --transparent
+uv run index.py SEC504 --transparent
+python3 index.py SEC504 --transparent
 ```
  
 To make it permanent, set the environment variable in your shell profile (`~/.bashrc`, `~/.zshrc`):
